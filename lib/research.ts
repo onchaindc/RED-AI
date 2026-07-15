@@ -358,10 +358,10 @@ async function serpRequest(q: string, engine: "google" | "baidu") {
 
 async function searchWeb(query: string) {
   const queries = [
-    `"${query}" founder OR co-founder`,
-    `"${query}" CEO OR team`,
-    `"${query}" official website startup OR project`,
-    `site:linkedin.com/in "${query}" founder OR co-founder`,
+    `"${query}" (founder OR "co-founder")`,
+    `"${query}" (CEO OR team)`,
+    `"${query}" (official OR startup OR project)`,
+    `site:linkedin.com/in "${query}" (founder OR "co-founder" OR CEO)`,
   ];
   const attempts = await Promise.allSettled(
     queries.map((value) => serpRequest(value, "google")),
