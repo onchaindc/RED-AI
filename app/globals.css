@@ -1734,3 +1734,356 @@ input:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Professional UI polish */
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body,
+button,
+input {
+  font-family:
+    "Segoe UI Variable", "Segoe UI", Inter, "Noto Sans SC",
+    "Microsoft YaHei", sans-serif;
+}
+
+body {
+  font-size: 14px;
+}
+
+.main,
+.topbar,
+.content,
+.result-wrap,
+.result-card,
+.signal-strip,
+.result-grid,
+.lower-grid {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.main {
+  overflow-x: clip;
+}
+
+.result-card {
+  overflow: hidden;
+}
+
+.search-form {
+  min-width: 0;
+  width: 100%;
+}
+
+.search-form input {
+  font-size: 14px;
+}
+
+.search-button {
+  font-size: 12px;
+}
+
+.brand strong {
+  font-size: 15px;
+}
+
+.brand small,
+.topbar-meta,
+.history-item small,
+.privacy-note strong {
+  font-size: 11px;
+}
+
+.nav-item,
+.history-item strong {
+  font-size: 13px;
+}
+
+.empty-state h1,
+.loading-heading h1,
+.error-state h1,
+.company-header h1,
+.card-heading h2 {
+  font-family:
+    "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", Inter,
+    "Noto Sans SC", sans-serif;
+  font-weight: 700;
+}
+
+.empty-state h1 {
+  letter-spacing: -0.065em;
+  line-height: 0.96;
+}
+
+.empty-lead {
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+.eyebrow,
+.example-row > span,
+.pipeline-title span {
+  font-size: 11px;
+}
+
+.example-row button,
+.capability-grid p,
+.pipeline-title small {
+  font-size: 12px;
+}
+
+.capability-grid strong {
+  font-size: 14px;
+}
+
+.company-header h1 {
+  font-size: 34px;
+  letter-spacing: -0.045em;
+}
+
+.company-header {
+  padding: 22px 24px 20px;
+}
+
+.company-identity {
+  gap: 15px;
+}
+
+.company-logo {
+  width: 56px;
+  height: 56px;
+}
+
+.company-header p {
+  max-width: 720px;
+  margin: 6px 0 8px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.website-link {
+  font-size: 12px;
+}
+
+.segment-badge {
+  font-size: 10px;
+}
+
+.signal-strip > div {
+  min-width: 0;
+  align-items: flex-start;
+  padding: 16px 24px;
+}
+
+.signal-strip > div > span {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.signal-strip small {
+  font-size: 9px;
+}
+
+.signal-strip strong {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  margin-top: 4px;
+  white-space: normal;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.signal-strip {
+  grid-template-columns: 1fr 1fr;
+}
+
+.signal-strip > div:nth-child(2) {
+  border-right: 0;
+}
+
+.signal-strip .signal-stage {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--line);
+  border-right: 0;
+}
+
+.signal-empty svg {
+  color: #aaa9a2;
+}
+
+.signal-empty small,
+.signal-empty strong {
+  color: var(--soft-muted);
+  font-weight: 500;
+}
+
+.detail-section {
+  padding: 24px;
+}
+
+.section-title strong {
+  font-size: 13px;
+}
+
+.section-title small {
+  font-size: 9px;
+}
+
+.founder-copy strong {
+  font-size: 13px;
+}
+
+.founder-copy small {
+  font-size: 11px;
+}
+
+.founder-row {
+  min-height: 64px;
+  padding: 5px 0;
+}
+
+.confidence-dot {
+  min-width: 56px;
+  text-align: center;
+}
+
+.running-tag,
+.cache-tag,
+.status-tag {
+  font-size: 9px;
+}
+
+.confidence-high {
+  color: #fff;
+  background: var(--green);
+  box-shadow: 0 1px 2px rgba(23, 134, 92, 0.2);
+}
+
+.confidence-medium {
+  color: var(--amber);
+  border: 1px solid #e4c895;
+  background: transparent;
+}
+
+.confidence-low {
+  min-width: 46px;
+  padding: 2px 5px;
+  color: #8b8b84;
+  background: #efefeb;
+  font-size: 8px;
+  font-weight: 650;
+}
+
+.email-main a,
+.email-main > strong {
+  font-size: 12px;
+}
+
+.email-meta,
+.contact-link small,
+.confidence-panel span,
+.reason-grid span,
+.card-heading span,
+.card-heading small {
+  font-size: 9px;
+}
+
+.contact-link strong {
+  font-size: 11px;
+}
+
+.confidence-panel p,
+.reason-grid p,
+.missing-field p,
+.issue-list p,
+.all-clear p {
+  font-size: 11px;
+}
+
+.contact-section,
+.email-section,
+.founder-section {
+  min-width: 0;
+}
+
+.contact-grid {
+  gap: 12px;
+}
+
+.confidence-panel {
+  margin: 0 24px 24px;
+}
+
+.missing-field,
+.email-missing,
+.contact-link-missing {
+  color: #a1a19a;
+  border-color: #e5e5e0;
+  background: #fbfbf9;
+}
+
+.missing-field svg,
+.contact-link-missing > span:first-child {
+  color: #aaa9a2;
+  background: #f0f0ed;
+}
+
+.email-missing .status-tag,
+.contact-link-missing strong {
+  color: #aaa9a2;
+  font-weight: 500;
+}
+
+.source-row strong,
+.all-clear strong {
+  font-size: 12px;
+}
+
+.source-row small {
+  font-size: 10px;
+}
+
+.loading-heading p,
+.stage-copy strong {
+  font-size: 13px;
+}
+
+.stage-copy small {
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .signal-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .signal-strip > div,
+  .signal-strip > div:nth-child(2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .signal-strip .signal-stage {
+    grid-column: 1;
+    border-top: 0;
+    border-bottom: 0;
+  }
+
+  .company-header,
+  .detail-section {
+    padding: 20px 18px;
+  }
+
+  .confidence-panel {
+    margin: 0 18px 20px;
+  }
+}

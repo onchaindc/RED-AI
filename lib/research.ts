@@ -210,6 +210,40 @@ function uniqueBy<T>(items: T[], key: (item: T) => string) {
   });
 }
 
+function founderKey(name: string) {
+  return name
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function mergeFounders(items: FounderRecord[]) {
+  const confidenceRank = { low: 1, medium: 2, high: 3 };
+  const merged = new Map<string, FounderRecord>();
+  for (const founder of items) {
+    const key = founderKey(founder.name);
+    if (!key) continue;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, founder);
+      continue;
+    }
+    const stronger =
+      confidenceRank[founder.confidence] > confidenceRank[existing.confidence]
+        ? founder
+        : existing;
+    merged.set(key, {
+      ...existing,
+      ...stronger,
+      role: stronger.role || existing.role,
+      bio: stronger.bio || existing.bio,
+      linkedin: founder.linkedin || existing.linkedin,
+      x: founder.x || existing.x,
+    });
+  }
+  return [...merged.values()];
+}
+
 function isPrivateIp(address: string) {
   if (address === "::1" || address.startsWith("fc") || address.startsWith("fd"))
     return true;
@@ -402,8 +436,30 @@ function cleanPersonName(value: string) {
     .replace(/\b(?:is|at|of|and|the)\b.*$/i, "")
     .trim();
   if (name.length < 2 || name.length > 70) return "";
+  if (/[.,;:!?()[\]{}]/u.test(name)) return "";
   if (
     /^(our|meet|team|about|company|founder|co-founder|ceo|chief|learn|read|contact|home)$/i.test(
+      name,
+    )
+  )
+    return "";
+  if (hasCjk(name)) {
+    return /^[\p{Script=Han}·]{2,7}$/u.test(name) ? name : "";
+  }
+  const words = name.split(/\s+/);
+  if (
+    words.length < 1 ||
+      words.length > 4 ||
+    words.some(
+      (word) =>
+        !/^[\p{Lu}][\p{L}'’-]*$/u.test(word) ||
+        (word.length > 1 && word === word.toLocaleUpperCase()),
+    )
+  )
+    return "";
+  if (
+    /^(?:He|She|It|They|We|I|This|That|These|Those)$/i.test(words[0]) ||
+    /\b(?:said|was|were|is|are|manages?|managed|across|twitter|residency|content|support|through|pitch|program|project|protocol|community|investors?|building|growth|campaigns?)\b/i.test(
       name,
     )
   )
@@ -414,9 +470,9 @@ function cleanPersonName(value: string) {
 function extractFoundersFromText(text: string) {
   const founders: FounderRecord[] = [];
   const roleFirst =
-    /\b(founder|co-founder|chief executive officer|ceo)\b\s*(?:is|:|—|–|-)?\s*([A-Z][\p{L}'’.-]+(?:\s+[A-Z][\p{L}'’.-]+){1,3})/giu;
+    /\b(Founder|founder|Co-founder|co-founder|Chief Executive Officer|chief executive officer|CEO)\b\s*(?:is|:|—|–|-)?\s*([A-Z][\p{L}'’.-]+(?:\s+(?:[A-Z][\p{L}'’.-]+|de|del|van|von|da|di)){1,3})/gu;
   const nameFirst =
-    /([A-Z][\p{L}'’.-]+(?:\s+[A-Z][\p{L}'’.-]+){1,3})\s*(?:,|—|–|-|\bis\b)\s*(co-founder|founder|chief executive officer|ceo)\b/giu;
+    /([A-Z][\p{L}'’.-]+(?:\s+(?:[A-Z][\p{L}'’.-]+|de|del|van|von|da|di)){1,3})\s*(?:,|—|–|-|\bis\b)\s*(Co-founder|co-founder|Founder|founder|Chief Executive Officer|chief executive officer|CEO)\b/gu;
   const chinese =
     /(?:联合创始人|创始人|首席执行官|CEO)\s*(?:是|为|[:：—–-])?\s*([\p{Script=Han}]{2,5})/gu;
 
@@ -426,7 +482,7 @@ function extractFoundersFromText(text: string) {
       founders.push({
         name,
         role: titleCaseRole(match[1]),
-        confidence: "medium",
+        confidence: "low",
       });
   }
   for (const match of text.matchAll(nameFirst)) {
@@ -435,15 +491,15 @@ function extractFoundersFromText(text: string) {
       founders.push({
         name,
         role: titleCaseRole(match[2]),
-        confidence: "medium",
+        confidence: "low",
       });
   }
   for (const match of text.matchAll(chinese)) {
     const name = cleanPersonName(match[1]);
     if (name)
-      founders.push({ name, role: "Founder / CEO", confidence: "medium" });
+      founders.push({ name, role: "Founder / CEO", confidence: "low" });
   }
-  return uniqueBy(founders, (founder) => founder.name);
+  return mergeFounders(founders);
 }
 
 function titleCaseRole(value: string) {
@@ -460,22 +516,28 @@ function jsonLdFounders($: cheerio.CheerioAPI) {
     try {
       const data = JSON.parse($(element).text()) as unknown;
       const nodes = Array.isArray(data) ? data : [data];
-      const visit = (value: unknown) => {
+      const visit = (value: unknown, relation = "") => {
         if (!value || typeof value !== "object") return;
         const record = value as Record<string, unknown>;
         const type = String(record["@type"] ?? "");
         const jobTitle = String(record.jobTitle ?? "");
         const name = typeof record.name === "string" ? record.name : "";
+        const hasLeadershipRole = /founder|chief executive|ceo/i.test(jobTitle);
+        const isFounderRelation = /founder/i.test(relation);
         if (
           name &&
-          (type.toLowerCase() === "person" ||
-            /founder|chief executive|ceo/i.test(jobTitle))
+          type.toLowerCase() === "person" &&
+          (hasLeadershipRole || isFounderRelation)
         ) {
+          const cleanName = cleanPersonName(name);
+          if (!cleanName) return;
           founders.push({
-            name: cleanPersonName(name),
-            role: /founder|chief executive|ceo/i.test(jobTitle)
+            name: cleanName,
+            role: hasLeadershipRole
               ? titleCaseRole(jobTitle)
-              : "Team",
+              : isFounderRelation
+                ? "Founder"
+                : undefined,
             bio:
               typeof record.description === "string"
                 ? cleanText(record.description)
@@ -483,14 +545,14 @@ function jsonLdFounders($: cheerio.CheerioAPI) {
             confidence: "high",
           });
         }
-        Object.values(record).forEach(visit);
+        Object.entries(record).forEach(([key, child]) => visit(child, key));
       };
-      nodes.forEach(visit);
+      nodes.forEach((node) => visit(node));
     } catch {
       // Many sites include malformed JSON-LD. Other extraction paths remain useful.
     }
   });
-  return founders.filter((founder) => founder.name);
+  return mergeFounders(founders.filter((founder) => founder.name));
 }
 
 function scrapePage(html: string, url: string) {
@@ -544,9 +606,8 @@ function scrapePage(html: string, url: string) {
     description,
     logo,
     emails: extractEmails($, text),
-    founders: uniqueBy(
+    founders: mergeFounders(
       [...jsonLdFounders($), ...extractFoundersFromText(text)],
-      (founder) => founder.name,
     ),
     channels,
     text,
@@ -599,7 +660,7 @@ async function scrapeWebsite(website: string): Promise<ScrapeBundle> {
   }
 
   bundle.emails = uniqueBy(bundle.emails, (email) => email);
-  bundle.founders = uniqueBy(bundle.founders, (founder) => founder.name);
+  bundle.founders = mergeFounders(bundle.founders);
   bundle.sources = uniqueBy(bundle.sources, (source) => source.url);
   return bundle;
 }
@@ -966,9 +1027,8 @@ export async function runResearch(
 
   emit(stage("profiles", "running", "Cross-checking founder and social profile evidence"));
   const profileSignals = founderSignalsFromHits(search.hits);
-  const founders = uniqueBy(
+  const founders = mergeFounders(
     [...(scraped?.founders ?? []), ...profileSignals.founders],
-    (founder) => founder.name,
   ).slice(0, 8);
   const channels: ContactChannels = {
     x: scraped?.channels.x ?? profileSignals.channels.x,
@@ -998,12 +1058,14 @@ export async function runResearch(
   emit(stage("enrichment", "running", "Using paid providers only if public scraping came up short"));
   if (!emailValue && domain) {
     let candidate: EnrichmentCandidate | undefined;
-    try {
-      candidate = await hunterEnrich(domain, founders);
-    } catch (error) {
-      issues.push(`Hunter: ${errorMessage(error)}`);
+    if (process.env.HUNTER_API_KEY) {
+      try {
+        candidate = await hunterEnrich(domain, founders);
+      } catch (error) {
+        issues.push(`Hunter: ${errorMessage(error)}`);
+      }
     }
-    if (!candidate) {
+    if (!candidate && process.env.APOLLO_API_KEY) {
       try {
         candidate = await apolloEnrich(
           domain,
@@ -1038,7 +1100,7 @@ export async function runResearch(
 
   let emailStatus: EmailRecord["status"] = emailValue ? "Likely" : "Not found";
   emit(stage("verification", "running", "Checking deliverability and source quality"));
-  if (emailValue) {
+  if (emailValue && process.env.HUNTER_API_KEY) {
     try {
       emailStatus = (await hunterVerify(emailValue)) ? "Verified" : "Likely";
       emit(
@@ -1054,6 +1116,14 @@ export async function runResearch(
       issues.push(`Email verification: ${errorMessage(error)}`);
       emit(stage("verification", "warning", "Verification was unavailable; marked Likely"));
     }
+  } else if (emailValue) {
+    emit(
+      stage(
+        "verification",
+        "complete",
+        "Hunter is optional and not configured; email remains marked Likely",
+      ),
+    );
   } else {
     emit(stage("verification", "warning", "No email candidate to verify"));
   }

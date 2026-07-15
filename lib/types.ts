@@ -32,7 +32,7 @@ export interface SourceRecord {
 
 export interface FounderRecord {
   name: string;
-  role: string;
+  role?: string;
   bio?: string;
   linkedin?: string;
   x?: string;

@@ -600,14 +600,24 @@ function ResultView({
               <strong>{result.segment.value}</strong>
             </span>
           </div>
-          <div>
+          <div
+            className={
+              result.region.value.startsWith("Not ") ? "signal-empty" : undefined
+            }
+          >
             <MapPin size={17} />
             <span>
               <small>Region / origin</small>
               <strong>{result.region.value}</strong>
             </span>
           </div>
-          <div>
+          <div
+            className={
+              result.fundingSignal === "No funding data found"
+                ? "signal-empty signal-stage"
+                : "signal-stage"
+            }
+          >
             <Sparkles size={17} />
             <span>
               <small>Stage signal</small>
@@ -624,7 +634,7 @@ function ResultView({
               meta={
                 result.founders.length
                   ? `${result.founders.length} found`
-                  : "No names found"
+                  : "No verified names"
               }
             />
             {result.founders.length ? (
@@ -636,7 +646,7 @@ function ResultView({
                     </span>
                     <span className="founder-copy">
                       <strong>{founder.name}</strong>
-                      <small>{founder.role}</small>
+                      {founder.role && <small>{founder.role}</small>}
                     </span>
                     <span className={`confidence-dot confidence-${founder.confidence}`}>
                       {founder.confidence}
@@ -668,8 +678,7 @@ function ResultView({
               </div>
             ) : (
               <MissingField>
-                No founder or CEO was named strongly enough across the available
-                sources.
+                No verified leadership found.
               </MissingField>
             )}
           </section>
