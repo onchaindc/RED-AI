@@ -762,7 +762,10 @@ async function hunterVerify(email: string) {
   );
 }
 
-function bestScrapedEmail(emails: string[], founders: FounderRecord[]) {
+function bestScrapedEmail(
+  emails: string[],
+  founders: FounderRecord[],
+): string | undefined {
   const nameTokens = founders
     .flatMap((founder) => founder.name.toLowerCase().split(/\s+/))
     .filter((token) => token.length > 2);
@@ -963,7 +966,10 @@ export async function runResearch(
 
   const website = scraped?.sources[0]?.url ?? websiteHit?.url;
   const domain = website ? rootDomain(website) : undefined;
-  let emailValue = bestScrapedEmail(scraped?.emails ?? [], founders);
+  let emailValue: string | undefined = bestScrapedEmail(
+    scraped?.emails ?? [],
+    founders,
+  );
   let emailSource: EmailRecord["source"] = emailValue
     ? "Scraped from site"
     : "Not found";
