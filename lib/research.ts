@@ -794,7 +794,14 @@ function guessedEmail(domain: string, founder?: FounderRecord) {
   return `${clean(parts.firstName)}.${clean(parts.lastName)}@${domain}`;
 }
 
-function inferSegment(text: string) {
+function inferSegment(text: string, evidenceCount: number) {
+  if (evidenceCount === 0) {
+    return {
+      value: "Ambiguous" as const,
+      reasoning:
+        "No public source evidence was available, so RED AI cannot classify this project yet.",
+    };
+  }
   const normalized = text.toLowerCase();
   const matches = WEB3_TERMS.filter((term) => normalized.includes(term));
   if (matches.length >= 2) {
@@ -896,6 +903,20 @@ export async function runResearch(
   emit: EmitStage,
 ): Promise<ResearchResult> {
   const query = cleanText(rawQuery).slice(0, 160);
+
+  if (!process.env.SERPAPI_KEY) {
+    emit(
+      stage(
+        "search",
+        "warning",
+        "Search provider is not configured for this deployment",
+      ),
+    );
+    throw new Error(
+      "RED AI cannot search yet because SERPAPI_KEY is missing. Add it in Vercel → Project Settings → Environment Variables, then redeploy.",
+    );
+  }
+
   const cacheKey = query.toLocaleLowerCase();
   const cached = cache.get(cacheKey);
   if (cached) {
@@ -1077,7 +1098,7 @@ export async function runResearch(
       domain,
       logo: scraped?.logo,
     },
-    segment: inferSegment(evidenceText),
+    segment: inferSegment(evidenceText, sourceRecords.length),
     region: inferRegion(evidenceText, query),
     founders,
     email,
