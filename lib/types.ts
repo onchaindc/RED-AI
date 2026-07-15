@@ -37,6 +37,7 @@ export interface FounderRecord {
   linkedin?: string;
   x?: string;
   confidence: "high" | "medium" | "low";
+  unverified?: boolean;
 }
 
 export interface ContactChannels {

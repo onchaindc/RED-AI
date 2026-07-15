@@ -239,6 +239,10 @@ function mergeFounders(items: FounderRecord[]) {
       bio: stronger.bio || existing.bio,
       linkedin: founder.linkedin || existing.linkedin,
       x: founder.x || existing.x,
+      unverified:
+        founder.unverified === true && existing.unverified === true
+          ? true
+          : undefined,
     });
   }
   return [...merged.values()];
@@ -316,6 +320,7 @@ async function safeFetchHtml(initialUrl: string) {
 async function serpRequest(q: string, engine: "google" | "baidu") {
   const apiKey = process.env.SERPAPI_KEY;
   if (!apiKey) throw new Error("SERPAPI_KEY is not configured");
+  console.info(`[RED AI] SerpAPI ${engine} query: ${q}`);
   const params = new URLSearchParams({
     api_key: apiKey,
     engine,
@@ -353,8 +358,10 @@ async function serpRequest(q: string, engine: "google" | "baidu") {
 
 async function searchWeb(query: string) {
   const queries = [
-    `"${query}" (founder OR co-founder OR CEO OR contact)`,
-    `"${query}" (startup OR project OR funding OR launched)`,
+    `"${query}" founder OR co-founder`,
+    `"${query}" CEO OR team`,
+    `"${query}" official website startup OR project`,
+    `site:linkedin.com/in "${query}" founder OR co-founder`,
   ];
   const attempts = await Promise.allSettled(
     queries.map((value) => serpRequest(value, "google")),
@@ -377,7 +384,7 @@ async function searchWeb(query: string) {
   }
 
   return {
-    hits: uniqueBy(hits, (hit) => hit.url).slice(0, 24),
+    hits: uniqueBy(hits, (hit) => hit.url).slice(0, 40),
     errors: uniqueBy(errors, (item) => item),
   };
 }
@@ -387,12 +394,28 @@ function websiteScore(hit: SearchHit, query: string) {
   if (!host || EXCLUDED_WEBSITE_HOSTS.some((excluded) => host.includes(excluded)))
     return -100;
   let score = 0;
+  const normalizedQuery = query
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]/gu, "");
+  const hostLabels = host.split(".");
+  const hostMatchIndex = hostLabels.findIndex(
+    (label) =>
+      label.normalize("NFKD").replace(/[^\p{L}\p{N}]/gu, "") === normalizedQuery,
+  );
   const queryTokens = query
     .toLowerCase()
     .split(/\s+/)
     .filter((token) => token.length > 2);
   const haystack = `${host} ${hit.title} ${hit.snippet}`.toLowerCase();
   score += queryTokens.filter((token) => haystack.includes(token)).length * 4;
+  if (hostMatchIndex === 0) score += 14;
+  if (hostMatchIndex > 0) score += 5;
+  if (
+    hostMatchIndex > 0 &&
+    /residency|foundation|careers|jobs|docs|blog/i.test(hostLabels[0])
+  )
+    score -= 10;
   if (new URL(hit.url).pathname === "/" || new URL(hit.url).pathname === "")
     score += 2;
   if (/official|homepage|welcome|about/i.test(hit.title + hit.snippet)) score += 2;
@@ -430,41 +453,54 @@ function extractEmails($: cheerio.CheerioAPI, text: string) {
   );
 }
 
-function cleanPersonName(value: string) {
-  const name = cleanText(value)
-    .replace(/[|•·—–,:，。]+$/u, "")
-    .replace(/\b(?:is|at|of|and|the)\b.*$/i, "")
-    .trim();
-  if (name.length < 2 || name.length > 70) return "";
-  if (/[.,;:!?()[\]{}]/u.test(name)) return "";
+function validatePersonName(value: string) {
+  const name = cleanText(value).replace(/[|•·—–,:，。]+$/u, "").trim();
+  if (name.length < 2 || name.length > 70)
+    return { name: "", reason: "name length is outside 2-70 characters" };
+  if (/[.,;:!?()[\]{}]/u.test(name))
+    return { name: "", reason: "contains sentence punctuation" };
   if (
     /^(our|meet|team|about|company|founder|co-founder|ceo|chief|learn|read|contact|home)$/i.test(
       name,
     )
   )
-    return "";
+    return { name: "", reason: "is a common non-name word" };
   if (hasCjk(name)) {
-    return /^[\p{Script=Han}·]{2,7}$/u.test(name) ? name : "";
+    return /^[\p{Script=Han}·]{2,7}$/u.test(name)
+      ? { name, reason: "" }
+      : { name: "", reason: "does not match a Chinese personal-name shape" };
   }
+
   const words = name.split(/\s+/);
+  if (words.length > 4)
+    return { name: "", reason: "contains more than four words" };
   if (
-    words.length < 1 ||
-      words.length > 4 ||
     words.some(
       (word) =>
         !/^[\p{Lu}][\p{L}'’-]*$/u.test(word) ||
         (word.length > 1 && word === word.toLocaleUpperCase()),
     )
   )
-    return "";
+    return { name: "", reason: "contains a non-capitalized or all-caps word" };
+  if (/^(?:He|She|It|They|We|I|This|That|These|Those)$/i.test(words[0]))
+    return { name: "", reason: "starts with a common sentence word" };
   if (
-    /^(?:He|She|It|They|We|I|This|That|These|Those)$/i.test(words[0]) ||
     /\b(?:said|was|were|is|are|manages?|managed|across|twitter|residency|content|support|through|pitch|program|project|protocol|community|investors?|building|growth|campaigns?)\b/i.test(
       name,
     )
   )
-    return "";
-  return name;
+    return { name: "", reason: "contains a prose verb or non-name term" };
+  return { name, reason: "" };
+}
+
+function cleanPersonName(value: string, context = "unknown source") {
+  const result = validatePersonName(value);
+  if (!result.name) {
+    console.info(
+      `[RED AI] Rejected founder candidate (${context}): ${JSON.stringify(value)} - ${result.reason}`,
+    );
+  }
+  return result.name;
 }
 
 function extractFoundersFromText(text: string) {
@@ -506,7 +542,7 @@ function titleCaseRole(value: string) {
   const normalized = value.toLowerCase();
   if (normalized === "ceo" || normalized.includes("chief executive"))
     return "CEO";
-  if (normalized.includes("co-founder")) return "Co-founder";
+  if (/co[\s-]?founder/.test(normalized)) return "Co-founder";
   return "Founder";
 }
 
@@ -665,11 +701,91 @@ async function scrapeWebsite(website: string): Promise<ScrapeBundle> {
   return bundle;
 }
 
+function profileTitleName(hit: SearchHit) {
+  if (
+    hit.sourceType === "linkedin" &&
+    !/^\/in\//i.test(new URL(hit.url).pathname)
+  )
+    return "";
+  if (!["linkedin", "x"].includes(hit.sourceType)) return "";
+
+  return cleanText(hit.title)
+    .replace(/\s*\(@[^)]+\).*$/u, "")
+    .split(/\s+(?:[|—–-])\s+/u)[0]
+    .replace(/^(?:Dr|Mr|Mrs|Ms)\.?\s+/i, "")
+    .trim();
+}
+
+function founderFromProfileHit(hit: SearchHit): FounderRecord | undefined {
+  const candidate = profileTitleName(hit);
+  if (!candidate) return undefined;
+  const name = cleanPersonName(candidate, `${hit.sourceType} search result`);
+  if (!name) return undefined;
+  const roleMatch = `${hit.title} ${hit.snippet}`.match(
+    /\b(co[\s-]?founder|founder|chief executive officer|ceo)\b/i,
+  );
+  return {
+    name,
+    role: roleMatch ? titleCaseRole(roleMatch[1]) : undefined,
+    linkedin: hit.sourceType === "linkedin" ? hit.url : undefined,
+    x: hit.sourceType === "x" ? hit.url : undefined,
+    confidence:
+      hit.sourceType === "linkedin" && Boolean(roleMatch) ? "medium" : "low",
+  };
+}
+
+function unverifiedFounderFromProfileHit(
+  hit: SearchHit,
+): FounderRecord | undefined {
+  const candidate = profileTitleName(hit);
+  if (!candidate || hasCjk(candidate)) return undefined;
+  const words = candidate.split(/\s+/);
+  if (
+    words.length < 2 ||
+    words.length > 4 ||
+    words.some((word) => !/^[\p{L}'’-]+$/u.test(word)) ||
+    /^(?:he|she|it|they|we|this|that)$/i.test(words[0]) ||
+    /\b(?:said|was|were|is|are|manages?|managed|founder|company|team|official)\b/i.test(
+      candidate,
+    )
+  )
+    return undefined;
+
+  const titleCased = words
+    .map((word) =>
+      word
+        .split(/([-’'])/u)
+        .map((part) =>
+          /^[-’']$/u.test(part)
+            ? part
+            : `${part.slice(0, 1).toLocaleUpperCase()}${part.slice(1).toLocaleLowerCase()}`,
+        )
+        .join(""),
+    )
+    .join(" ");
+  const name = cleanPersonName(titleCased, `${hit.sourceType} fallback result`);
+  if (!name) return undefined;
+  const roleMatch = `${hit.title} ${hit.snippet}`.match(
+    /\b(co[\s-]?founder|founder|chief executive officer|ceo)\b/i,
+  );
+  return {
+    name,
+    role: roleMatch ? titleCaseRole(roleMatch[1]) : undefined,
+    linkedin: hit.sourceType === "linkedin" ? hit.url : undefined,
+    x: hit.sourceType === "x" ? hit.url : undefined,
+    confidence: "low",
+    unverified: true,
+  };
+}
+
 function founderSignalsFromHits(hits: SearchHit[]) {
   const profileHits = hits.filter((hit) =>
     ["linkedin", "x", "crunchbase", "wellfound"].includes(hit.sourceType),
   );
-  const founders = extractFoundersFromText(
+  const directProfileFounders = profileHits
+    .map(founderFromProfileHit)
+    .filter((founder): founder is FounderRecord => Boolean(founder));
+  const textFounders = extractFoundersFromText(
     hits.map((hit) => `${hit.title}. ${hit.snippet}`).join(" "),
   ).map((founder) => {
     const matching = profileHits.find((hit) =>
@@ -683,6 +799,14 @@ function founderSignalsFromHits(hits: SearchHit[]) {
       x: matching?.sourceType === "x" ? matching.url : undefined,
     };
   });
+  let founders = mergeFounders([...directProfileFounders, ...textFounders]);
+  if (!founders.length) {
+    founders = mergeFounders(
+      profileHits
+        .map(unverifiedFounderFromProfileHit)
+        .filter((founder): founder is FounderRecord => Boolean(founder)),
+    );
+  }
   return {
     founders,
     channels: {

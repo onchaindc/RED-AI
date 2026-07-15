@@ -649,7 +649,9 @@ function ResultView({
                       {founder.role && <small>{founder.role}</small>}
                     </span>
                     <span className={`confidence-dot confidence-${founder.confidence}`}>
-                      {founder.confidence}
+                      {founder.unverified
+                        ? "Low · unverified"
+                        : founder.confidence}
                     </span>
                     <span className="founder-links">
                       {founder.linkedin && (

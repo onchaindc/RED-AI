@@ -1954,6 +1954,7 @@ body {
 .confidence-dot {
   min-width: 56px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .running-tag,
