@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  EntityCandidate,
   PipelineStage,
   PipelineStageId,
   ResearchResult,
@@ -44,6 +45,7 @@ interface HistoryEntry {
   query: string;
   companyName: string;
   searchedAt: string;
+  entity?: EntityCandidate;
 }
 
 const HISTORY_KEY = "red-ai-search-history";
@@ -72,6 +74,10 @@ export default function HomePage() {
   const [stages, setStages] = useState(INITIAL_STAGES);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [ambiguity, setAmbiguity] = useState<{
+    query: string;
+    candidates: EntityCandidate[];
+  } | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -108,6 +114,7 @@ export default function HomePage() {
         query: nextResult.query,
         companyName: nextResult.company.name,
         searchedAt: nextResult.searchedAt,
+        entity: nextResult.resolvedEntity,
       },
       ...history.filter(
         (item) => item.query.toLowerCase() !== nextResult.query.toLowerCase(),
@@ -121,7 +128,7 @@ export default function HomePage() {
     }
   }
 
-  async function runSearch(nextQuery?: string) {
+  async function runSearch(nextQuery?: string, entity?: EntityCandidate) {
     const value = (nextQuery ?? query).trim();
     if (value.length < 2 || loading) return;
 
@@ -131,6 +138,7 @@ export default function HomePage() {
     setQuery(value);
     setLoading(true);
     setError("");
+    setAmbiguity(null);
     setResult(null);
     setStages(INITIAL_STAGES.map((item) => ({ ...item })));
     setMobileMenuOpen(false);
@@ -139,7 +147,7 @@ export default function HomePage() {
       const response = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: value }),
+        body: JSON.stringify({ query: value, entity }),
         signal: controller.signal,
       });
 
@@ -173,6 +181,11 @@ export default function HomePage() {
           } else if (event.type === "result") {
             setResult(event.result);
             updateHistory(event.result);
+          } else if (event.type === "ambiguity") {
+            setAmbiguity({
+              query: event.query,
+              candidates: event.candidates,
+            });
           } else {
             throw new Error(event.message);
           }
@@ -204,6 +217,7 @@ export default function HomePage() {
             className="brand"
             onClick={() => {
               setResult(null);
+              setAmbiguity(null);
               setQuery("");
               setError("");
             }}
@@ -246,7 +260,7 @@ export default function HomePage() {
                 <button
                   key={`${item.query}-${item.searchedAt}`}
                   className="history-item"
-                  onClick={() => void runSearch(item.query)}
+                  onClick={() => void runSearch(item.query, item.entity)}
                   disabled={loading}
                 >
                   <span className="history-icon">
@@ -322,7 +336,7 @@ export default function HomePage() {
         </header>
 
         <div className="content">
-          {!loading && !result && !error && (
+          {!loading && !result && !error && !ambiguity && (
             <EmptyState onExample={(value) => void runSearch(value)} />
           )}
 
@@ -339,8 +353,23 @@ export default function HomePage() {
             <ErrorState message={error} onRetry={() => void runSearch()} />
           )}
 
+          {ambiguity && !loading && !error && (
+            <DisambiguationState
+              query={ambiguity.query}
+              candidates={ambiguity.candidates}
+              onSelect={(candidate) =>
+                void runSearch(ambiguity.query, candidate)
+              }
+            />
+          )}
+
           {result && !loading && (
-            <ResultView result={result} onRefresh={() => void runSearch()} />
+            <ResultView
+              result={result}
+              onRefresh={() =>
+                void runSearch(result.query, result.resolvedEntity)
+              }
+            />
           )}
         </div>
       </main>
@@ -519,6 +548,47 @@ function ErrorState({
         <RefreshCw size={16} />
         Try again
       </button>
+    </section>
+  );
+}
+
+function DisambiguationState({
+  query,
+  candidates,
+  onSelect,
+}: {
+  query: string;
+  candidates: EntityCandidate[];
+  onSelect: (candidate: EntityCandidate) => void;
+}) {
+  return (
+    <section className="disambiguation-state">
+      <div className="eyebrow">
+        <AlertTriangle size={14} />
+        More than one entity found
+      </div>
+      <h1>Which “{query}” did you mean?</h1>
+      <p>
+        RED found several distinct public entities with this name. Choose one
+        so leadership and contact signals stay attached to the right
+        organization.
+      </p>
+      <div className="entity-picker">
+        {candidates.map((candidate) => (
+          <button
+            className="entity-option"
+            key={candidate.id}
+            onClick={() => onSelect(candidate)}
+          >
+            <span className="entity-option-copy">
+              <strong>{candidate.name}</strong>
+              <small>{candidate.description}</small>
+              <em>{host(candidate.website)}</em>
+            </span>
+            <ChevronRight size={18} />
+          </button>
+        ))}
+      </div>
     </section>
   );
 }

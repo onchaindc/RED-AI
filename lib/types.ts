@@ -40,6 +40,14 @@ export interface FounderRecord {
   unverified?: boolean;
 }
 
+export interface EntityCandidate {
+  id: string;
+  name: string;
+  description: string;
+  website: string;
+  domain: string;
+}
+
 export interface ContactChannels {
   x?: string;
   linkedin?: string;
@@ -61,6 +69,7 @@ export interface ResearchResult {
   query: string;
   searchedAt: string;
   cached: boolean;
+  resolvedEntity?: EntityCandidate;
   company: {
     name: string;
     description: string;
@@ -89,5 +98,10 @@ export interface ResearchResult {
 
 export type SearchEvent =
   | { type: "stage"; stage: PipelineStage }
+  | {
+      type: "ambiguity";
+      query: string;
+      candidates: EntityCandidate[];
+    }
   | { type: "result"; result: ResearchResult }
   | { type: "fatal"; message: string };

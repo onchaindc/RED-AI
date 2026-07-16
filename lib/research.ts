@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import type {
   ContactChannels,
   EmailRecord,
+  EntityCandidate,
   FounderRecord,
   PipelineStage,
   PipelineStageId,
@@ -36,6 +37,10 @@ interface EnrichmentCandidate {
   email: string;
   source: "Hunter" | "Apollo";
 }
+
+export type ResearchOutcome =
+  | { type: "ambiguity"; query: string; candidates: EntityCandidate[] }
+  | { type: "result"; result: ResearchResult };
 
 const STAGES: Record<PipelineStageId, string> = {
   search: "Searching the web",
@@ -146,10 +151,14 @@ const EMAIL_REGEX =
 
 const globalCache = globalThis as typeof globalThis & {
   __redResearchCache?: Map<string, ResearchResult>;
+  __redAmbiguityCache?: Map<string, EntityCandidate[]>;
 };
 
 const cache = globalCache.__redResearchCache ?? new Map<string, ResearchResult>();
 globalCache.__redResearchCache = cache;
+const ambiguityCache =
+  globalCache.__redAmbiguityCache ?? new Map<string, EntityCandidate[]>();
+globalCache.__redAmbiguityCache = ambiguityCache;
 
 function stage(
   id: PipelineStageId,
@@ -189,6 +198,15 @@ function safeHost(value: string) {
 function rootDomain(value: string) {
   const host = safeHost(value);
   return host.replace(/^www\./, "");
+}
+
+function normalizedWords(value: string) {
+  return cleanText(value)
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 2);
 }
 
 function absoluteUrl(value: string | undefined, base: string) {
@@ -356,12 +374,16 @@ async function serpRequest(q: string, engine: "google" | "baidu") {
     }));
 }
 
-async function searchWeb(query: string) {
+async function searchWeb(query: string, entity?: EntityCandidate) {
+  const label = entity?.name || query;
+  const domainHint = entity?.domain ? ` ${entity.domain}` : "";
   const queries = [
-    `"${query}" (founder OR "co-founder")`,
-    `"${query}" (CEO OR team)`,
-    `"${query}" (official OR startup OR project)`,
-    `site:linkedin.com/in "${query}" (founder OR "co-founder" OR CEO)`,
+    entity ? `"${label}"${domainHint}` : `"${query}"`,
+    `"${label}"${domainHint} (founder OR "co-founder")`,
+    `"${label}"${domainHint} (CEO OR team)`,
+    `"${label}"${domainHint} (official OR startup OR project OR protocol)`,
+    `"${label}"${domainHint} (blockchain OR institute OR browser OR research)`,
+    `site:linkedin.com/in "${label}"${domainHint} (founder OR "co-founder" OR CEO)`,
   ];
   const attempts = await Promise.allSettled(
     queries.map((value) => serpRequest(value, "google")),
@@ -384,9 +406,110 @@ async function searchWeb(query: string) {
   }
 
   return {
-    hits: uniqueBy(hits, (hit) => hit.url).slice(0, 40),
+    hits: uniqueBy(hits, (hit) => hit.url).slice(0, 60),
     errors: uniqueBy(errors, (item) => item),
   };
+}
+
+const DISCOVERY_EXCLUDED_HOSTS = [
+  ...EXCLUDED_WEBSITE_HOSTS,
+  "reddit.com",
+  "wikipedia.org",
+  "spotify.com",
+  "apple.com",
+];
+
+function candidateDescription(hit: SearchHit) {
+  return (
+    cleanText(hit.snippet).replace(/^(?:About|Official site)\s*[:—-]?\s*/i, "") ||
+    `Public result for ${cleanText(hit.title)}`
+  ).slice(0, 190);
+}
+
+function candidateName(hit: SearchHit, query?: string) {
+  const base = cleanText(hit.title)
+    .split(/\s+(?:[|—–-])\s+/u)[0]
+    .replace(/\s+(?:Official Site|Homepage)$/i, "")
+    .trim();
+  const hostLabels = rootDomain(hit.url).split(".");
+  if (
+    query &&
+    base.toLocaleLowerCase() === query.toLocaleLowerCase() &&
+    hostLabels.length > 2 &&
+    hostLabels[0].toLocaleLowerCase() === query.toLocaleLowerCase()
+  ) {
+    const owner = hostLabels[1];
+    return `${base} (${owner.slice(0, 1).toLocaleUpperCase()}${owner.slice(1)})`;
+  }
+  return base;
+}
+
+function discoverEntityCandidates(hits: SearchHit[], query: string) {
+  const candidates = new Map<string, { candidate: EntityCandidate; score: number }>();
+  for (const [index, hit] of hits.slice(0, 60).entries()) {
+    const domain = rootDomain(hit.url);
+    if (
+      !domain ||
+      DISCOVERY_EXCLUDED_HOSTS.some((excluded) => domain.includes(excluded)) ||
+      hit.sourceType !== "search"
+    )
+      continue;
+    const existing = candidates.get(domain);
+    const score = websiteScore(hit, query) + Math.max(0, 8 - index);
+    if (!existing || score > existing.score) {
+      candidates.set(domain, {
+        candidate: {
+          id: domain,
+          name: candidateName(hit, query) || query,
+          description: candidateDescription(hit),
+          website: new URL(hit.url).origin,
+          domain,
+        },
+        score,
+      });
+    }
+  }
+
+  return [...candidates.values()]
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.candidate)
+    .slice(0, 5);
+}
+
+function shouldDisambiguate(query: string, candidates: EntityCandidate[]) {
+  if (candidates.length < 2) return false;
+  const shortQuery = normalizedWords(query).length <= 1 || query.trim().length <= 5;
+  if (!shortQuery) return false;
+  const signatures = candidates.slice(0, 5).map((candidate) =>
+    new Set(normalizedWords(`${candidate.name} ${candidate.description}`)),
+  );
+  const divergentPairs = signatures.slice(1).filter((signature) => {
+    const overlap = [...signature].filter((word) => signatures[0].has(word));
+    return overlap.length <= 1;
+  }).length;
+  return divergentPairs >= 1;
+}
+
+function hitMatchesEntity(hit: SearchHit, entity: EntityCandidate) {
+  const domain = rootDomain(hit.url);
+  if (domain === entity.domain || domain.endsWith(`.${entity.domain}`)) return true;
+  const entityTokens = normalizedWords(entity.name).filter(
+    (word) => !["official", "website", "home"].includes(word),
+  );
+  const domainTokens = normalizedWords(entity.domain.replaceAll(".", " "));
+  const haystack = `${hit.title} ${hit.snippet}`.toLocaleLowerCase();
+  const hasIdentity = [...entityTokens, ...domainTokens].some(
+    (token) => token.length > 3 && haystack.includes(token),
+  );
+  if (!hasIdentity) return false;
+
+  const competingDomains = ["stripe.com", "arcinstitute.org", "circle.com", "arc.net"];
+  return !competingDomains.some(
+    (competitor) =>
+      entity.domain !== competitor &&
+      !entity.domain.endsWith(`.${competitor}`) &&
+      haystack.includes(competitor),
+  );
 }
 
 function websiteScore(hit: SearchHit, query: string) {
@@ -453,12 +576,21 @@ function extractEmails($: cheerio.CheerioAPI, text: string) {
   );
 }
 
+const LEADERSHIP_TITLE_WORDS =
+  /\b(?:executive|director|investigator|president|officer|chief|chair|chairman|chairwoman|manager|partner|professor|scientist|engineer|head|lead)\b/i;
+const FUSED_TITLE_SUFFIX =
+  /(?<=[\p{Ll}])(?:Co|Founder|CEO|Director|President|Executive|Investigator)$/u;
+
 function validatePersonName(value: string) {
   const name = cleanText(value).replace(/[|•·—–,:，。]+$/u, "").trim();
   if (name.length < 2 || name.length > 70)
     return { name: "", reason: "name length is outside 2-70 characters" };
   if (/[.,;:!?()[\]{}]/u.test(name))
     return { name: "", reason: "contains sentence punctuation" };
+  if (LEADERSHIP_TITLE_WORDS.test(name))
+    return { name: "", reason: "contains a leadership title word" };
+  if (FUSED_TITLE_SUFFIX.test(name))
+    return { name: "", reason: "contains a fused leadership-title suffix" };
   if (
     /^(our|meet|team|about|company|founder|co-founder|ceo|chief|learn|read|contact|home)$/i.test(
       name,
@@ -538,6 +670,35 @@ function extractFoundersFromText(text: string) {
   return mergeFounders(founders);
 }
 
+function cleanLeadershipRole(value: string) {
+  const role = cleanText(value).match(
+    /\b(?:co[\s-]?founder|founder|chief executive officer|ceo)(?:\s*(?:&|and)\s*(?:executive director|core investigator|president|ceo))?/i,
+  )?.[0];
+  if (!role) return undefined;
+  return role
+    .replace(/\bco[\s-]?founder\b/i, "Co-founder")
+    .replace(/\bfounder\b/i, "Founder")
+    .replace(/\bchief executive officer\b|\bceo\b/i, "CEO")
+    .replace(/\bexecutive director\b/i, "Executive Director")
+    .replace(/\bcore investigator\b/i, "Core Investigator")
+    .replace(/\bpresident\b/i, "President");
+}
+
+function domLeadershipFounders($: cheerio.CheerioAPI) {
+  const founders: FounderRecord[] = [];
+  $("h1, h2, h3, h4, h5, h6, [itemprop='name']").each((_, element) => {
+    const name = cleanPersonName($(element).text(), "structured team heading");
+    if (!name) return;
+    const nearby = cleanText(
+      $(element).nextAll().slice(0, 3).map((__, item) => $(item).text()).get().join(" "),
+    ).slice(0, 180);
+    const role = cleanLeadershipRole(nearby);
+    if (!role) return;
+    founders.push({ name, role, confidence: "high" });
+  });
+  return mergeFounders(founders);
+}
+
 function titleCaseRole(value: string) {
   const normalized = value.toLowerCase();
   if (normalized === "ceo" || normalized.includes("chief executive"))
@@ -594,6 +755,9 @@ function jsonLdFounders($: cheerio.CheerioAPI) {
 function scrapePage(html: string, url: string) {
   const $ = cheerio.load(html);
   $("script, style, noscript, svg").remove();
+  $("br, p, div, section, article, li, dt, dd, h1, h2, h3, h4, h5, h6").append(
+    " ",
+  );
   const text = cleanText($("body").text()).slice(0, 180_000);
   const companyName =
     cleanText($("meta[property='og:site_name']").attr("content")) ||
@@ -643,7 +807,11 @@ function scrapePage(html: string, url: string) {
     logo,
     emails: extractEmails($, text),
     founders: mergeFounders(
-      [...jsonLdFounders($), ...extractFoundersFromText(text)],
+      [
+        ...jsonLdFounders($),
+        ...domLeadershipFounders($),
+        ...extractFoundersFromText(text),
+      ],
     ),
     channels,
     text,
@@ -785,20 +953,15 @@ function founderSignalsFromHits(hits: SearchHit[]) {
   const directProfileFounders = profileHits
     .map(founderFromProfileHit)
     .filter((founder): founder is FounderRecord => Boolean(founder));
-  const textFounders = extractFoundersFromText(
-    hits.map((hit) => `${hit.title}. ${hit.snippet}`).join(" "),
-  ).map((founder) => {
-    const matching = profileHits.find((hit) =>
-      `${hit.title} ${hit.snippet}`
-        .toLowerCase()
-        .includes(founder.name.toLowerCase()),
-    );
-    return {
-      ...founder,
-      linkedin: matching?.sourceType === "linkedin" ? matching.url : undefined,
-      x: matching?.sourceType === "x" ? matching.url : undefined,
-    };
-  });
+  const textFounders = mergeFounders(
+    hits.flatMap((hit) =>
+      extractFoundersFromText(`${hit.title}. ${hit.snippet}`).map((founder) => ({
+        ...founder,
+        linkedin: hit.sourceType === "linkedin" ? hit.url : undefined,
+        x: hit.sourceType === "x" ? hit.url : undefined,
+      })),
+    ),
+  );
   let founders = mergeFounders([...directProfileFounders, ...textFounders]);
   if (!founders.length) {
     founders = mergeFounders(
@@ -1086,7 +1249,8 @@ function errorMessage(error: unknown) {
 export async function runResearch(
   rawQuery: string,
   emit: EmitStage,
-): Promise<ResearchResult> {
+  selectedEntity?: EntityCandidate,
+): Promise<ResearchOutcome> {
   const query = cleanText(rawQuery).slice(0, 160);
 
   if (!process.env.SERPAPI_KEY) {
@@ -1102,7 +1266,14 @@ export async function runResearch(
     );
   }
 
-  const cacheKey = query.toLocaleLowerCase();
+  const cacheKey = `${query.toLocaleLowerCase()}|${selectedEntity?.domain ?? "auto"}`;
+  if (!selectedEntity) {
+    const cachedCandidates = ambiguityCache.get(query.toLocaleLowerCase());
+    if (cachedCandidates) {
+      emit(stage("search", "complete", "Reused the entity choices from this session"));
+      return { type: "ambiguity", query, candidates: cachedCandidates };
+    }
+  }
   const cached = cache.get(cacheKey);
   if (cached) {
     emit(stage("search", "complete", "Found a session cache match"));
@@ -1111,12 +1282,12 @@ export async function runResearch(
     emit(stage("enrichment", "complete", "No provider credits used"));
     emit(stage("verification", "complete", "Reused previous verification"));
     emit(stage("synthesis", "complete", "Brief restored"));
-    return { ...cached, cached: true };
+    return { type: "result", result: { ...cached, cached: true } };
   }
 
   const issues: string[] = [];
   emit(stage("search", "running", "Running English and local-language query variants"));
-  const search = await searchWeb(query);
+  const search = await searchWeb(query, selectedEntity);
   issues.push(...search.errors.map((message) => `Web search: ${message}`));
   emit(
     stage(
@@ -1128,7 +1299,40 @@ export async function runResearch(
     ),
   );
 
-  const websiteHit = pickWebsite(search.hits, query);
+  const candidates = discoverEntityCandidates(search.hits, query);
+  if (!selectedEntity && shouldDisambiguate(query, candidates)) {
+    ambiguityCache.set(query.toLocaleLowerCase(), candidates);
+    emit(
+      stage(
+        "search",
+        "complete",
+        `${candidates.length} plausible entities need confirmation`,
+      ),
+    );
+    return { type: "ambiguity", query, candidates };
+  }
+
+  const websiteHit = selectedEntity
+    ? {
+        title: selectedEntity.name,
+        url: selectedEntity.website,
+        snippet: selectedEntity.description,
+        sourceType: "search" as const,
+      }
+    : pickWebsite(search.hits, query);
+  const resolvedEntity: EntityCandidate | undefined = selectedEntity ??
+    (websiteHit
+      ? {
+          id: rootDomain(websiteHit.url),
+          name: candidateName(websiteHit, query) || query,
+          description: candidateDescription(websiteHit),
+          website: websiteHit.url,
+          domain: rootDomain(websiteHit.url),
+        }
+      : undefined);
+  const relevantHits = resolvedEntity
+    ? search.hits.filter((hit) => hitMatchesEntity(hit, resolvedEntity))
+    : search.hits;
   let scraped: ScrapeBundle | undefined;
   emit(stage("website", "running", "Looking for team, about, contact, and footer details"));
   if (websiteHit && websiteScore(websiteHit, query) > -50) {
@@ -1150,7 +1354,7 @@ export async function runResearch(
   }
 
   emit(stage("profiles", "running", "Cross-checking founder and social profile evidence"));
-  const profileSignals = founderSignalsFromHits(search.hits);
+  const profileSignals = founderSignalsFromHits(relevantHits);
   const founders = mergeFounders(
     [...(scraped?.founders ?? []), ...profileSignals.founders],
   ).slice(0, 8);
@@ -1256,7 +1460,7 @@ export async function runResearch(
   const sourceRecords: SourceRecord[] = uniqueBy(
     [
       ...(scraped?.sources ?? []),
-      ...search.hits.slice(0, 10).map<SourceRecord>((hit) => ({
+      ...relevantHits.slice(0, 10).map<SourceRecord>((hit) => ({
         title: hit.title,
         url: hit.url,
         snippet: hit.snippet,
@@ -1269,7 +1473,7 @@ export async function runResearch(
     query,
     scraped?.description,
     scraped?.text,
-    ...search.hits.map((hit) => `${hit.title} ${hit.snippet}`),
+    ...relevantHits.map((hit) => `${hit.title} ${hit.snippet}`),
   ]
     .filter(Boolean)
     .join(" ");
@@ -1282,11 +1486,12 @@ export async function runResearch(
     query,
     searchedAt: new Date().toISOString(),
     cached: false,
+    resolvedEntity,
     company: {
-      name: scraped?.companyName || search.hits[0]?.title || query,
+      name: scraped?.companyName || resolvedEntity?.name || relevantHits[0]?.title || query,
       description:
         scraped?.description ||
-        search.hits.find((hit) => hit.snippet)?.snippet ||
+        relevantHits.find((hit) => hit.snippet)?.snippet ||
         "No reliable one-line company description was found.",
       website,
       domain,
@@ -1297,7 +1502,7 @@ export async function runResearch(
     founders,
     email,
     channels,
-    fundingSignal: inferFunding(search.hits),
+    fundingSignal: inferFunding(relevantHits),
     confidenceNote: humanConfidence(
       founders,
       email,
@@ -1309,7 +1514,8 @@ export async function runResearch(
   };
 
   cache.set(cacheKey, result);
+  ambiguityCache.delete(query.toLocaleLowerCase());
   if (cache.size > 100) cache.delete(cache.keys().next().value as string);
   emit(stage("synthesis", "complete", "Research brief ready"));
-  return result;
+  return { type: "result", result };
 }
