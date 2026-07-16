@@ -627,6 +627,8 @@ const LEADERSHIP_TITLE_WORDS =
   /\b(?:executive|director|investigator|president|officer|chief|chair|chairman|chairwoman|manager|partner|professor|scientist|engineer|head|lead)\b/i;
 const FUSED_TITLE_SUFFIX =
   /(?<=[\p{Ll}])(?:Co|Founder|CEO|Director|President|Executive|Investigator)$/u;
+const PROSE_OR_TITLE_TOKEN =
+  /^(?:as|co|at|of|and|the|in|for|by|on|to|from|with|our|meet|team|about|company|founder|co-founder|ceo|chief|learn|read|contact|home)$/i;
 
 function validatePersonName(value: string) {
   const name = cleanText(value).replace(/[|•·—–,:，。]+$/u, "").trim();
@@ -638,11 +640,7 @@ function validatePersonName(value: string) {
     return { name: "", reason: "contains a leadership title word" };
   if (FUSED_TITLE_SUFFIX.test(name))
     return { name: "", reason: "contains a fused leadership-title suffix" };
-  if (
-    /^(our|meet|team|about|company|founder|co-founder|ceo|chief|learn|read|contact|home)$/i.test(
-      name,
-    )
-  )
+  if (PROSE_OR_TITLE_TOKEN.test(name))
     return { name: "", reason: "is a common non-name word" };
   if (hasCjk(name)) {
     return /^[\p{Script=Han}·]{2,7}$/u.test(name)
@@ -661,6 +659,8 @@ function validatePersonName(value: string) {
     )
   )
     return { name: "", reason: "contains a non-capitalized or all-caps word" };
+  if (words.some((word) => PROSE_OR_TITLE_TOKEN.test(word)))
+    return { name: "", reason: "contains a prose connector or title token" };
   if (/^(?:He|She|It|They|We|I|This|That|These|Those)$/i.test(words[0]))
     return { name: "", reason: "starts with a common sentence word" };
   if (
