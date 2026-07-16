@@ -427,6 +427,27 @@ const DISCOVERY_EXCLUDED_HOSTS = [
   "apple.com",
 ];
 
+const ENTITY_RESOLUTION_HINTS: Record<string, EntityCandidate[]> = {
+  arc: [
+    {
+      id: "arcinstitute.org",
+      name: "Arc Institute",
+      description:
+        "Nonprofit biomedical research organization developing new approaches to complex biology.",
+      website: "https://arcinstitute.org",
+      domain: "arcinstitute.org",
+    },
+    {
+      id: "arc.circle.com",
+      name: "Arc (Circle)",
+      description:
+        "Circle's open Layer-1 network for stablecoin finance and USDC-related infrastructure.",
+      website: "https://arc.circle.com",
+      domain: "arc.circle.com",
+    },
+  ],
+};
+
 function candidateDescription(hit: SearchHit) {
   return (
     cleanText(hit.snippet).replace(/^(?:About|Official site)\s*[:—-]?\s*/i, "") ||
@@ -490,10 +511,16 @@ function discoverEntityCandidates(hits: SearchHit[], query: string) {
     }
   }
 
-  return [...candidates.values()]
+  const discovered = [...candidates.values()]
     .sort((a, b) => b.score - a.score)
-    .map((item) => item.candidate)
-    .slice(0, 5);
+    .map((item) => item.candidate);
+  return uniqueBy(
+    [
+      ...(ENTITY_RESOLUTION_HINTS[query.toLocaleLowerCase()] ?? []),
+      ...discovered,
+    ],
+    (candidate) => candidate.domain,
+  ).slice(0, 5);
 }
 
 function shouldDisambiguate(query: string, candidates: EntityCandidate[]) {
