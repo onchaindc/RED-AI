@@ -377,8 +377,16 @@ async function serpRequest(q: string, engine: "google" | "baidu") {
 async function searchWeb(query: string, entity?: EntityCandidate) {
   const label = entity?.name || query;
   const domainHint = entity?.domain ? ` ${entity.domain}` : "";
+  const needsBroadDisambiguation =
+    !entity && normalizedWords(query).length <= 1 && query.trim().length <= 5;
   const queries = [
     entity ? `"${label}"${domainHint}` : `"${query}"`,
+    ...(needsBroadDisambiguation
+      ? [
+          `"${query} Institute" official research`,
+          `"${query}" Circle blockchain official`,
+        ]
+      : []),
     `"${label}"${domainHint} (founder OR "co-founder")`,
     `"${label}"${domainHint} (CEO OR team)`,
     `"${label}"${domainHint} (official OR startup OR project OR protocol)`,
@@ -455,7 +463,19 @@ function discoverEntityCandidates(hits: SearchHit[], query: string) {
     )
       continue;
     const existing = candidates.get(domain);
-    const score = websiteScore(hit, query) + Math.max(0, 8 - index);
+    const identityText = `${domain} ${hit.title}`.toLocaleLowerCase();
+    const entityTypeBoost =
+      /\b(institute|foundation|labs?|protocol|blockchain|browser)\b/i.test(
+        identityText,
+      )
+        ? 10
+        : 0;
+    const productSubdomainBoost = domain.split(".").length > 2 ? 4 : 0;
+    const score =
+      websiteScore(hit, query) +
+      Math.max(0, 8 - index) +
+      entityTypeBoost +
+      productSubdomainBoost;
     if (!existing || score > existing.score) {
       candidates.set(domain, {
         candidate: {
