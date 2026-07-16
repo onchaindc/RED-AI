@@ -931,11 +931,41 @@ function profileTitleName(hit: SearchHit) {
     .trim();
 }
 
-function founderFromProfileHit(hit: SearchHit): FounderRecord | undefined {
+function sourceSupportsEntityLeadership(
+  hit: SearchHit,
+  entity?: EntityCandidate,
+  query?: string,
+) {
+  if (!entity) return true;
+  const title = hit.title.toLocaleLowerCase();
+  const text = `${hit.title} ${hit.snippet}`.toLocaleLowerCase();
+  if (text.includes(entity.domain.toLocaleLowerCase())) return true;
+  const queryToken = normalizedWords(query || entity.name)[0];
+  const distinctiveToken = [
+    ...normalizedWords(entity.name),
+    ...normalizedWords(entity.domain.replaceAll(".", " ")),
+  ]
+    .filter((token) => token !== queryToken && !["com", "org", "net"].includes(token))
+    .sort((a, b) => b.length - a.length)[0];
+  return Boolean(
+    queryToken &&
+      distinctiveToken &&
+      title.includes(queryToken) &&
+      title.includes(distinctiveToken),
+  );
+}
+
+function founderFromProfileHit(
+  hit: SearchHit,
+  entity?: EntityCandidate,
+  query?: string,
+): FounderRecord | undefined {
+  if (!sourceSupportsEntityLeadership(hit, entity, query)) return undefined;
   const candidate = profileTitleName(hit);
   if (!candidate) return undefined;
   const name = cleanPersonName(candidate, `${hit.sourceType} search result`);
   if (!name) return undefined;
+  if (!hasCjk(name) && name.split(/\s+/).length < 2) return undefined;
   const roleMatch = `${hit.title} ${hit.snippet}`.match(
     /\b(co[\s-]?founder|founder|chief executive officer|ceo)\b/i,
   );
@@ -993,15 +1023,20 @@ function unverifiedFounderFromProfileHit(
   };
 }
 
-function founderSignalsFromHits(hits: SearchHit[]) {
+function founderSignalsFromHits(
+  hits: SearchHit[],
+  entity?: EntityCandidate,
+  query?: string,
+) {
   const profileHits = hits.filter((hit) =>
-    ["linkedin", "x", "crunchbase", "wellfound"].includes(hit.sourceType),
+    ["linkedin", "x", "crunchbase", "wellfound"].includes(hit.sourceType) &&
+    sourceSupportsEntityLeadership(hit, entity, query),
   );
   const directProfileFounders = profileHits
-    .map(founderFromProfileHit)
+    .map((hit) => founderFromProfileHit(hit, entity, query))
     .filter((founder): founder is FounderRecord => Boolean(founder));
   const textFounders = mergeFounders(
-    hits.flatMap((hit) =>
+    hits.filter((hit) => sourceSupportsEntityLeadership(hit, entity, query)).flatMap((hit) =>
       extractFoundersFromText(`${hit.title}. ${hit.snippet}`).map((founder) => ({
         ...founder,
         linkedin: hit.sourceType === "linkedin" ? hit.url : undefined,
@@ -1401,7 +1436,11 @@ export async function runResearch(
   }
 
   emit(stage("profiles", "running", "Cross-checking founder and social profile evidence"));
-  const profileSignals = founderSignalsFromHits(relevantHits);
+  const profileSignals = founderSignalsFromHits(
+    relevantHits,
+    resolvedEntity,
+    query,
+  );
   const founders = mergeFounders(
     [...(scraped?.founders ?? []), ...profileSignals.founders],
   ).slice(0, 8);
